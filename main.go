@@ -19,8 +19,8 @@ func randomInt(min, max int64) int64 {
 }
 
 func main() {
-	// Random duration from 20 through 30 seconds.
-	duration := time.Duration(randomInt(20, 30)) * time.Second
+	// Random duration from 10 through 20 seconds.
+	duration := time.Duration(randomInt(10, 20)) * time.Second
 
 	// Allocate up to 1 GiB, but keep the actual allocation bounded by
 	// available memory and avoid making the host unusable.
