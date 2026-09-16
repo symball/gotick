@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	maxMemory = 1 << 30
-	pageSize  = 4096
+	maxMemory     = 2 << 30
+	minMemoryStep = 16 << 20
+	pageSize      = 4096
 )
 
 func main() {
@@ -24,12 +25,12 @@ func main() {
 		runtime.NumCPU()*2,
 	)
 
-	memory := make([]byte, maxMemory)
-	fmt.Printf("Allocated %d MiB of simulated RAM\n", len(memory)/(1<<20))
-
-	fmt.Println("Touching memory pages to commit the allocation...")
-	touchAllPages(memory)
-	fmt.Println("Initial memory commitment complete")
+	memory := make([]byte, 0, maxMemory)
+	fmt.Printf(
+		"Memory target will vary between %d MiB and %d MiB\n",
+		minMemoryStep/(1<<20),
+		maxMemory/(1<<20),
+	)
 
 	// Give separate instances different startup phases.
 	startupDelay := randomDuration(rng, 0, 1500*time.Millisecond)
@@ -110,8 +111,8 @@ func main() {
 
 	// Memory activity runs independently of the CPU workers.
 	for time.Now().Before(deadline) {
-		fmt.Println("Selecting random memory regions to touch")
-		touchRandomMemory(rng, memory)
+		targetMemory := randomMemoryTarget(rng)
+		memory = adjustMemoryTarget(memory, targetMemory)
 
 		// Irregular intervals prevent all instances from producing identical
 		// chart boundaries.
@@ -131,7 +132,10 @@ func main() {
 	wg.Wait()
 
 	// Release memory and exit cleanly.
-	fmt.Println("Releasing simulated RAM and requesting garbage collection")
+	fmt.Printf(
+		"Releasing %d MiB of simulated RAM and requesting garbage collection\n",
+		len(memory)/(1<<20),
+	)
 	memory = nil
 	runtime.GC()
 
@@ -146,51 +150,66 @@ func randomDuration(rng *rand.Rand, min, max time.Duration) time.Duration {
 	return min + time.Duration(rng.Int63n(int64(max-min)+1))
 }
 
-func touchAllPages(memory []byte) {
-	for offset := 0; offset < len(memory); offset += pageSize {
-		memory[offset] = byte(offset / pageSize)
-	}
+func randomMemoryTarget(rng *rand.Rand) int {
+	steps := maxMemory / minMemoryStep
+	return minMemoryStep * (1 + rng.Intn(steps))
 }
 
-func touchRandomMemory(rng *rand.Rand, memory []byte) {
+func adjustMemoryTarget(memory []byte, target int) []byte {
+	current := len(memory)
+
+	if current == target {
+		fmt.Printf("Memory target remains at %d MiB\n", target/(1<<20))
+		touchRandomMemory(memory)
+		return memory
+	}
+
+	if current < target {
+		growth := target - current
+		fmt.Printf(
+			"Increasing memory target from %d MiB to %d MiB\n",
+			current/(1<<20),
+			target/(1<<20),
+		)
+
+		memory = append(memory, make([]byte, growth)...)
+		touchRange(memory, current, len(memory))
+		return memory
+	}
+
+	fmt.Printf(
+		"Decreasing memory target from %d MiB to %d MiB\n",
+		current/(1<<20),
+		target/(1<<20),
+	)
+
+	memory = memory[:target]
+	runtime.GC()
+	return memory
+}
+
+func touchRandomMemory(memory []byte) {
 	if len(memory) == 0 {
 		fmt.Println("Skipping memory activity because no memory is allocated")
 		return
 	}
 
-	// Vary the amount of memory touched substantially.
-	minPages := 256                    // 1 MiB
-	maxPages := len(memory) / pageSize // Up to the full allocation
-	pageCount := minPages
+	fmt.Printf(
+		"Touching the current %d MiB memory target\n",
+		len(memory)/(1<<20),
+	)
+	touchRange(memory, 0, len(memory))
+}
 
-	if maxPages > minPages {
-		pageCount += rng.Intn(maxPages - minPages + 1)
+func touchRange(memory []byte, start, end int) {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(memory) {
+		end = len(memory)
 	}
 
-	// Touch several independent regions rather than one linear range.
-	regions := 1 + rng.Intn(8)
-
-	fmt.Printf(
-		"Touching approximately %d MiB across %d random memory regions\n",
-		(pageCount*pageSize)/(1<<20),
-		regions,
-	)
-
-	for region := 0; region < regions; region++ {
-		maxStartPage := maxPages - pageCount
-		startPage := 0
-
-		if maxStartPage > 0 {
-			startPage = rng.Intn(maxStartPage + 1)
-		}
-
-		for page := 0; page < pageCount/regions; page++ {
-			offset := (startPage + page) * pageSize
-			if offset >= len(memory) {
-				break
-			}
-
-			memory[offset]++
-		}
+	for offset := start; offset < end; offset += pageSize {
+		memory[offset]++
 	}
 }
